@@ -1,0 +1,28 @@
+{
+  "employeeName": "Road M Runner",
+  "employeeEmail": "roadmrunner@mailinator.com",
+  "jobTitle": "Sr. Super Speedy Software Engineer",
+  "supervisor": "Mr. Wylie Coyote",
+  "department": "Engineering",
+  "employeeId": "AC12345",
+  "startDate": "2025-11-01",
+  "workLocation": "Earth",
+  "officePhone": "123-456-7890",
+  "projectAssignment": "Super Secret Project",
+  "managerEmail": "wylieecoyote@acme.com",
+
+  "employmentStatus": "Active",
+  "hireDate": "2025-10-15",
+  "jobLevel": "Senior",
+  "managerId": "MGR98765",
+  "systemUsername": "r.runner",
+  "assignedLaptopSerial": "ACME-LAP-00123",
+  "vpnAccess": "Yes",
+  "twoFactorEnabled": "Yes",
+  "bankAccountLast4": "6789",
+  "paySchedule": "Bi-Weekly",
+  "emergencyContact": "Tweety Bird - 321-654-0987",
+  "officeLocation": "ACME HQ - Desert Canyon Campus",
+  "employeeType": "Full-Time",
+  "benefitsEligible": "Yes"
+}
