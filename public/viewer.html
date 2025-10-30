@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Viewer • Foxit</title>
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      html, body { height: 100%; }
+      body { margin: 0; display: flex; flex-direction: column; }
+      header { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+      header h1 { font-size: 16px; margin: 0; }
+      header .badge { margin-left: auto; font-size: 12px; color: #1f2937; background: #f3f4f6; border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; }
+      main { flex: 1 1 auto; display: flex; }
+      #foxit-viewer { width: 100%; height: calc(100vh - 52px); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>PDF Viewer</h1>
+      <span id="mode-badge" class="badge">Viewer: —</span>
+    </header>
+    <main>
+      <div id="foxit-viewer" aria-label="Foxit PDF viewer"></div>
+      <details id="debug-panel" style="padding:10px 14px; border-top:1px solid var(--border);">
+        <summary>Debug info</summary>
+        <pre id="debug-pre" style="white-space:pre-wrap; word-break:break-word; background:#fafafa; border:1px solid var(--border); padding:10px; border-radius:8px; max-height:40vh; overflow:auto;"></pre>
+      </details>
+    </main>
+
+    <script src="/viewer.js"></script>
+  </body>
+</html>

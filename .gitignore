@@ -1,0 +1,20 @@
+# Node
+node_modules/
+.npmrc
+
+# Env
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Generated PDFS
+output/
