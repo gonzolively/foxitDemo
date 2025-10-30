@@ -224,6 +224,7 @@ app.post('/api/generate', async (req, res) => {
         if (resp.ok) {
           let json;
           try { json = JSON.parse(text); } catch (_) { json = { raw: text }; }
+          try { console.log('Foxit generate result:', JSON.stringify(redactLargeFields(json), null, 2)); } catch(_) {}
           // Attempt to extract base64 PDF and save to filesystem
           const b64 = extractBase64FromGenerateResp(json);
           if (b64) {
@@ -241,12 +242,21 @@ app.post('/api/generate', async (req, res) => {
               if (returnBase64 === true) respPayload.fileBase64 = b64;
               return res.json(respPayload);
             } catch (e) {
+              try { console.error('Foxit generate save failed:', e.message); } catch(_) {}
               return res.json({ provider: 'foxit', saved: false, reason: 'write-failed', detail: e.message, foxit: json });
             }
           }
           // No base64 found; return raw response
+          try { console.warn('Foxit generate response contained no PDF base64'); } catch(_) {}
           return res.json({ provider: 'foxit', saved: false, reason: 'no-pdf-in-response', foxit: json });
         }
+        // Log failure body (attempt to parse JSON for readability)
+        try {
+          let errJson;
+          try { errJson = JSON.parse(text); } catch(_) {}
+          if (errJson) console.error('Foxit generate error response:', JSON.stringify(redactLargeFields(errJson), null, 2));
+          else console.error('Foxit generate error response (text):', (text || '').slice(0, 1200));
+        } catch(_) {}
         attempts.push({ url, status: resp.status, body: text?.slice(0, 300) });
       } catch (e) {
         attempts.push({ url, error: e.message });
@@ -415,6 +425,9 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
     attempts.push({ step: 'multi-step', error: e.message, envelopeId });
   }
 
+  try {
+    console.error('Foxit eSign send failed. Attempts:', JSON.stringify(attempts, null, 2));
+  } catch(_) {}
   throw new Error(`eSign send failed; attempts: ${attempts.map(a=>`${a.step||''}@${a.url||''} -> ${a.status||'ERR'}${a.error?(' '+a.error):''}`).join(' | ')}`);
 }
 
@@ -470,6 +483,7 @@ app.post('/api/esign/send', async (req, res) => {
     const result = await sendViaFoxitEsign(buffer, filename, signer.name || 'Signer', signer.email, subj, msg);
     return res.json({ provider: 'foxit-esign', ok: true, result });
   } catch (err) {
+    try { console.error('eSign /api/esign/send error:', err?.message || err); } catch(_) {}
     return res.status(502).json({ provider: 'foxit-esign', ok: false, error: err.message });
   }
 });
@@ -680,6 +694,33 @@ function extractBase64FromGenerateResp(resp) {
     }
   }
   return null;
+}
+
+// Redact very large string fields (especially base64) before logging to console
+function redactLargeFields(obj, depth = 0) {
+  const MAX_INLINE = 200; // inline strings up to this length
+  const BASE64_KEYS = new Set([
+    'base64FileString','FileBase64','fileBase64','Base64FileString',
+    'document','documentBase64','file','pdfBase64','content','data',
+    'fileContent','FileContent','FileBytes','pdf','Pdf','PDF','OutputFile'
+  ]);
+  if (obj == null) return obj;
+  if (typeof obj === 'string') {
+    return obj.length > MAX_INLINE ? `[string length: ${obj.length}]` : obj;
+  }
+  if (Array.isArray(obj)) return obj.map(v => redactLargeFields(v, depth + 1));
+  if (typeof obj === 'object') {
+    const out = Array.isArray(obj) ? [] : {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string' && (v.length > MAX_INLINE || BASE64_KEYS.has(k))) {
+        out[k] = `[${BASE64_KEYS.has(k) ? 'base64' : 'string'} length: ${v.length}]`;
+      } else {
+        out[k] = redactLargeFields(v, depth + 1);
+      }
+    }
+    return out;
+  }
+  return obj;
 }
 function getAnalyzeUrls() {
   const base = process.env.FOXIT_DOCGEN_BASE_URL;
