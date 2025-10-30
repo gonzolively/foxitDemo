@@ -72,11 +72,33 @@ async function ensureFoxitEmbed() {
   return foxitEmbedView;
 }
 
-function showToast(message) {
+function showToast(message, opts = {}) {
+  const { kind = 'info', durationMs } = opts;
   const toast = document.getElementById('toast');
+  if (!toast) return;
   toast.textContent = message;
-  toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 1800);
+  toast.classList.remove('info', 'success', 'error');
+  toast.classList.add('show', kind);
+  const ms = Number.isFinite(durationMs) ? durationMs : (kind === 'error' ? 8000 : 2000);
+  if (toast._hideTimer) {
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = null;
+  }
+  toast._hideTimer = setTimeout(() => {
+    toast.classList.remove('show');
+    toast._hideTimer = null;
+  }, ms);
+  // Allow user to dismiss immediately by clicking the toast
+  if (!toast._clickBound) {
+    toast.addEventListener('click', () => {
+      if (toast._hideTimer) {
+        clearTimeout(toast._hideTimer);
+        toast._hideTimer = null;
+      }
+      toast.classList.remove('show');
+    });
+    toast._clickBound = true;
+  }
 }
 
 async function handleAction(action, step, btn) {
@@ -111,12 +133,12 @@ async function handleAction(action, step, btn) {
         if (btn) { btn.classList.add('error'); btn.classList.remove('success'); }
         let msg = `${step.title}: generate failed`;
         if (genData && genData.error) msg += ` — ${genData.error}`;
-        showToast(msg);
+        showToast(msg, { kind: 'error', durationMs: 8000 });
         try { console.debug('Generate failed', genData); } catch(_) {}
         return;
       }
       if (btn) { btn.classList.add('success'); btn.classList.remove('error'); btn.setAttribute('aria-pressed', 'true'); }
-      showToast(`${step.title}: generate succeeded`);
+      showToast(`${step.title}: generate succeeded`, { kind: 'success' });
 
       // Save latest URL for Preview
       let pdfUrl = null;
@@ -130,9 +152,9 @@ async function handleAction(action, step, btn) {
       }
       if (pdfUrl) {
         lastGenerated[step.key] = pdfUrl;
-        showToast('PDF generated. Use Preview to view it.');
+        showToast('PDF generated. Use Preview to view it.', { kind: 'success' });
       } else {
-        showToast('Generate returned no PDF');
+        showToast('Generate returned no PDF', { kind: 'error', durationMs: 6000 });
       }
       return;
     }
@@ -142,7 +164,7 @@ async function handleAction(action, step, btn) {
       if (btn) btn.classList.remove('pending');
       const pdfUrl = lastGenerated[step.key];
       if (!pdfUrl) {
-        showToast('No PDF to preview. Generate first.');
+        showToast('No PDF to preview. Generate first.', { kind: 'error', durationMs: 5000 });
         if (btn) { btn.classList.add('error'); btn.classList.remove('success'); }
         return;
       }
@@ -151,7 +173,7 @@ async function handleAction(action, step, btn) {
       const href = `/viewer.html?file=${encodeURIComponent(abs)}&name=${name}`;
       window.open(href, '_blank', 'noopener,noreferrer');
       if (btn) { btn.classList.add('success'); btn.classList.remove('error'); btn.setAttribute('aria-pressed', 'true'); }
-      showToast('Opening preview in a new window');
+      showToast('Opening preview in a new window', { kind: 'info' });
       return;
     }
 
@@ -166,10 +188,10 @@ async function handleAction(action, step, btn) {
       if (btn) btn.classList.remove('pending');
       if (res.ok || res.status === 202) {
         if (btn) { btn.classList.add('success'); btn.classList.remove('error'); btn.setAttribute('aria-pressed', 'true'); }
-        showToast(`${step.title}: send queued`);
+        showToast(`${step.title}: send queued`, { kind: 'success' });
       } else {
         if (btn) { btn.classList.add('error'); btn.classList.remove('success'); }
-        showToast(`${step.title}: send failed${data?.error?` — ${data.error}`:''}`);
+        showToast(`${step.title}: send failed${data?.error?` — ${data.error}`:''}`, { kind: 'error', durationMs: 8000 });
         try { console.debug('Send failed', data); } catch(_) {}
       }
       return;
@@ -182,7 +204,7 @@ async function handleAction(action, step, btn) {
       btn.classList.remove('pending');
       btn.classList.add('error');
     }
-    showToast(`Error: ${action} failed`);
+    showToast(`Error: ${action} failed`, { kind: 'error', durationMs: 8000 });
     try { console.debug('Request error:', err); } catch (_) {}
   }
 }
