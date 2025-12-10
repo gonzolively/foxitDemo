@@ -322,8 +322,25 @@ async function buildEsignAuthHeaders() {
 
 async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subject, message) {
   const base = getEsignBase();
-  if (!base) throw new Error('Set FOXIT_ESIGN_BASE_URL for eSign');
-  const headers = await buildEsignAuthHeaders();
+  // If eSign is not configured, behave as a mocked send and short-circuit
+  if (!base) {
+    return {
+      mocked: true,
+      message: 'Foxit eSign is not configured (FOXIT_ESIGN_BASE_URL not set); no email was sent. This is a demo stub.',
+    };
+  }
+
+  let headers;
+  try {
+    headers = await buildEsignAuthHeaders();
+  } catch (e) {
+    // If auth is not configured, also treat as mocked send
+    return {
+      mocked: true,
+      message: 'Foxit eSign auth is not configured; no email was sent. This is a demo stub.',
+      error: e.message,
+    };
+  }
   const attempts = [];
   const b64 = Buffer.from(buffer).toString('base64');
 
@@ -601,14 +618,12 @@ function flattenJson(obj, prefix = '', out = {}) {
 }
 
 function getGenerateUrls() {
-  const base = process.env.FOXIT_DOCGEN_BASE_URL;
   const explicit = process.env.FOXIT_DOCGEN_GENERATE_URL;
   if (explicit) return [explicit];
-  if (!base) return [];
-  const b = base.replace(/\/$/, '');
+
+  // Default to the known Foxit docgen generate endpoint
   return [
-    `${b}/GenerateDocumentBase64`,
-    `${b}/generate`,
+    'https://na1.fusion.foxit.com/document-generation/api/GenerateDocumentBase64',
   ];
 }
 
@@ -619,8 +634,8 @@ async function getFoxitAccessToken() {
     return process.env.FOXIT_ACCESS_TOKEN;
   }
   const tokenUrl = process.env.FOXIT_TOKEN_URL;
-  const clientId = process.env.FOXIT_CLIENT_ID;
-  const clientSecret = process.env.FOXIT_CLIENT_SECRET;
+  const clientId = process.env.FOXIT_CLIENT_ID || process.env.FOXIT_CLOUD_API_CLIENT_ID;
+  const clientSecret = process.env.FOXIT_CLIENT_SECRET || process.env.FOXIT_CLOUD_API_CLIENT_SECRET;
   const scope = process.env.FOXIT_SCOPE; // optional
   // If no token URL provided, signal that bearer flow is not configured
   if (!tokenUrl) {
@@ -652,8 +667,8 @@ async function getFoxitAccessToken() {
 
 async function buildFoxitAuthHeaders() {
   const headers = { };
-  const id = process.env.FOXIT_CLIENT_ID;
-  const secret = process.env.FOXIT_CLIENT_SECRET;
+  const id = process.env.FOXIT_CLIENT_ID || process.env.FOXIT_CLOUD_API_CLIENT_ID;
+  const secret = process.env.FOXIT_CLIENT_SECRET || process.env.FOXIT_CLOUD_API_CLIENT_SECRET;
 
   // Prefer Bearer if available
   const accessToken = await getFoxitAccessToken();
@@ -723,16 +738,12 @@ function redactLargeFields(obj, depth = 0) {
   return obj;
 }
 function getAnalyzeUrls() {
-  const base = process.env.FOXIT_DOCGEN_BASE_URL;
   const explicitUrl = process.env.FOXIT_DOCGEN_ANALYZE_URL; // preferred if set
   if (explicitUrl) return [explicitUrl];
-  if (!base) return [];
-  const b = base.replace(/\/$/, '');
+
+  // Default to the known Foxit docgen analyze endpoint
   return [
-    `${b}/templates/analyze`,
-    `${b}/analyze`,
-    `${b}/template/analyze`,
-    `${b}/templates:analyze`,
+    'https://na1.fusion.foxit.com/document-generation/api/AnalyzeDocumentBase64',
   ];
 }
 
