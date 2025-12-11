@@ -8,7 +8,7 @@ This Node.js (Express) demo shows how to turn a repetitive HR workflow into a si
 1. **PDF template analysis + data merge (PDF Services API)**  
    - Uses various Foxit APIs to [analyze templates](https://docs.developer-api.foxit.com/#3719098f-9944-45b0-a6ee-3f6129f21622) and [generate filled PDFs](https://docs.developer-api.foxit.com/#638f4c9c-7230-4700-a808-8a888d50b4d2) from JSON-like employee data.  
    - Shows how to pass structured data from your app into Foxit and save the generated PDFs to `/output`.  
-   - Includes ready-made Word templates in `templates/` that demonstrate merge fields and hidden Foxit eSign text tags (see **Templates & Text Tags** below).
+   - Includes ready-made Word templates in `templates/` (see `templates/README.md` for how they are organized and how to customize them).
 
 2. **Mocked email-based eSign workflow (placeholder for Foxit eSign API)**  
    - Shows where you would upload a generated PDF to Foxit eSign and send it for signature via a secure email link.  
@@ -31,7 +31,7 @@ This Node.js (Express) demo shows how to turn a repetitive HR workflow into a si
 4. Click **Preview** to open the most recently generated PDF for that task in a new tab (uses your browser’s PDF viewer).  
 5. Press **Send for Signing** — this triggers the **mocked** eSign flow to illustrate where you would integrate Foxit eSign (no real email/signing is performed yet). To enable real Foxit eSign emails and signing, see the **Foxit eSign Integration** section below.  
 
-**Tip:** There are also pre-generated example PDFs in the `examples/` directory that you can open directly to see what the filled documents look like.
+**Note:** Each major subfolder (`templates/`, `employee_data/`, `examples/`, `public/`) includes its own README with more detail on how that part of the demo works and how to extend it.
 
 ---
 
@@ -64,7 +64,7 @@ npm install
 3) Start the app
 
 ```sh
-npm run dev
+npm start 
 ```
 
 4) Open the app in your browser by going to:
@@ -76,20 +76,6 @@ http://localhost:3000
 5) Try it out!
 
 **Note:** Helpful API debugging messages (requests, responses, and errors) are printed to the Node.js server console.
-
----
-
-## 📄 Templates & Text Tags
-
-- The Word templates in the `templates/` folder (e.g. the confidentiality, handbook, and IT policy docs) are intended as **working examples** of how to design DocGen-friendly templates: merge fields, simple layout, and optional [Foxit eSign text tags](https://docs.developer-api.foxit.com/#document-generation-quick-start-guide).
-- For the confidentiality-style templates, the **Employee Signature** and **Date Signed** areas use Foxit eSign text tags such as `${s:1:y:Employee_Signature}` and `${datefield:1:y:Date_Signed}`.
-- In this demo, those tag strings are formatted in **white text** so they are effectively invisible in the generated PDF, while eSign still turns them into live fields.
-- To edit these tags in Word:
-   1. Select the tag text (the `${...}` part) and temporarily change the font color to black (or another visible color).
-   2. Make any changes you need to the tag text.
-   3. Set the font color back to white so the tag disappears again in the final PDF, leaving only the signature/date fields visible to the signer.
-
----
 
 ## ✉️ Foxit eSign Integration
 

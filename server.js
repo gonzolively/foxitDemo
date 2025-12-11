@@ -80,6 +80,7 @@ const steps = [
     title: 'Confidentiality (NDA) Agreement',
     description: 'Acknowledge and sign the company confidentiality agreement.',
     demo: true,
+    templateDir: 'confidentiality-agreement',
     completed: false
   },
   {
@@ -88,6 +89,7 @@ const steps = [
     title: 'Employee Handbook Acknowledgement',
     description: 'Confirm receipt and understanding of the employee handbook.',
     demo: true,
+    templateDir: 'handbook-ack',
     completed: false
   },
   {
@@ -96,6 +98,7 @@ const steps = [
     title: 'IT Security Policy Acknowledgement',
     description: 'Acknowledge IT acceptable use and security policies.',
     demo: true,
+    templateDir: 'it-security-policy',
     completed: false
   }
 ];
@@ -114,6 +117,14 @@ function toSlug(s) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'doc';
+}
+
+// Optional helper to look up a template subdirectory for a given step.
+// This makes it easy to see how HR tasks map to template folders.
+function getTemplateDirForStep(stepKey) {
+  if (!stepKey) return null;
+  const step = steps.find(s => s.key === stepKey);
+  return step && step.templateDir ? step.templateDir : null;
 }
 
 async function resolveFileBinDirectUrl(filebinUrl) {
@@ -313,7 +324,7 @@ app.get('/api/employees', (req, res) => {
 app.post('/api/generate', async (req, res) => {
   try {
     const { stepKey, templateName, base64FileString, documentValues, outputFormat, currencyCulture, employeeKey, returnBase64 } = req.body || {};
-    const templatesDir = path.join(__dirname, 'templates');
+    const templatesRoot = path.join(__dirname, 'templates');
     const employeesDir = path.join(__dirname, 'employee_data');
 
     // Resolve template buffer
@@ -323,18 +334,52 @@ app.post('/api/generate', async (req, res) => {
       buffer = Buffer.from(base64FileString, 'base64');
       filename = 'template.docx';
     } else {
-      const mapping = {
-        'confidentiality-agreement': 'Confidentiality_Agreement_Acknowledgment.docx',
-        'handbook-ack': 'Employee_Handbook_Acknowledgment.docx',
-        'it-security-policy': 'IT_Security_Policy_Acknowledgment.docx'
-      };
-      filename = templateName || (stepKey ? mapping[stepKey] : undefined);
-      if (!filename) {
-        return res.status(400).json({ error: 'templateName or stepKey (mapped) is required when base64FileString is not provided' });
+      let filePath = null;
+
+      // 1) If a stepKey is provided, prefer a subdirectory mapped from the step
+      //    (for example: templates/confidentiality-agreement/*.docx).
+      if (stepKey) {
+        const dirName = getTemplateDirForStep(stepKey) || stepKey;
+        const dirPath = path.join(templatesRoot, dirName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          const candidates = fs.readdirSync(dirPath)
+            .filter(f => f.toLowerCase().endsWith('.docx'))
+            .sort();
+          if (candidates.length > 0) {
+            filename = candidates[0];
+            filePath = path.join(dirPath, filename);
+          }
+        }
       }
-      const filePath = path.join(templatesDir, filename);
+
+      // 2) If we still don't have a file and templateName is provided, treat it
+      //    first as a subdirectory under templates/, then as a direct file name
+      //    for backward compatibility.
+      if (!filePath && templateName) {
+        const dirPath = path.join(templatesRoot, templateName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          const candidates = fs.readdirSync(dirPath)
+            .filter(f => f.toLowerCase().endsWith('.docx'))
+            .sort();
+          if (candidates.length > 0) {
+            filename = candidates[0];
+            filePath = path.join(dirPath, filename);
+          }
+        }
+        if (!filePath) {
+          const directPath = path.join(templatesRoot, templateName);
+          if (fs.existsSync(directPath)) {
+            filename = templateName;
+            filePath = directPath;
+          }
+        }
+      }
+
+      if (!filePath) {
+        return res.status(400).json({ error: 'templateName or stepKey (with matching template subdirectory) is required when base64FileString is not provided' });
+      }
       if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: `Template not found: ${filename}` });
+        return res.status(404).json({ error: `Template not found: ${filePath}` });
       }
       buffer = fs.readFileSync(filePath);
     }
@@ -1097,7 +1142,7 @@ app.post('/api/analyze', async (req, res) => {
   try {
     const { templateName, stepKey, base64FileString } = req.body || {};
 
-    const templatesDir = path.join(__dirname, 'templates');
+    const templatesRoot = path.join(__dirname, 'templates');
 
     // Resolve buffer to send to Foxit
     let buffer;
@@ -1107,19 +1152,51 @@ app.post('/api/analyze', async (req, res) => {
       buffer = Buffer.from(base64FileString, 'base64');
       filename = 'upload.docx';
     } else {
-      const mapping = {
-        'confidentiality-agreement': 'Confidentiality_Agreement_Acknowledgment.docx',
-        'handbook-ack': 'Employee_Handbook_Acknowledgment.docx',
-        'it-security-policy': 'IT_Security_Policy_Acknowledgment.docx'
-      };
+      let filePath = null;
 
-      filename = templateName || (stepKey ? mapping[stepKey] : undefined);
-      if (!filename) {
-        return res.status(400).json({ error: 'templateName or stepKey (mapped) is required when base64FileString is not provided' });
+      // 1) If a stepKey is provided, prefer a subdirectory mapped from the step
+      //    (for example: templates/confidentiality-agreement/*.docx).
+      if (stepKey) {
+        const dirName = getTemplateDirForStep(stepKey) || stepKey;
+        const dirPath = path.join(templatesRoot, dirName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          const candidates = fs.readdirSync(dirPath)
+            .filter(f => f.toLowerCase().endsWith('.docx'))
+            .sort();
+          if (candidates.length > 0) {
+            filename = candidates[0];
+            filePath = path.join(dirPath, filename);
+          }
+        }
       }
-      const filePath = path.join(templatesDir, filename);
+
+      // 2) If we still don't have a file and templateName is provided, treat it
+      //    first as a subdirectory under templates/, then as a direct file name.
+      if (!filePath && templateName) {
+        const dirPath = path.join(templatesRoot, templateName);
+        if (fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory()) {
+          const candidates = fs.readdirSync(dirPath)
+            .filter(f => f.toLowerCase().endsWith('.docx'))
+            .sort();
+          if (candidates.length > 0) {
+            filename = candidates[0];
+            filePath = path.join(dirPath, filename);
+          }
+        }
+        if (!filePath) {
+          const directPath = path.join(templatesRoot, templateName);
+          if (fs.existsSync(directPath)) {
+            filename = templateName;
+            filePath = directPath;
+          }
+        }
+      }
+
+      if (!filePath) {
+        return res.status(400).json({ error: 'templateName or stepKey (with matching template subdirectory) is required when base64FileString is not provided' });
+      }
       if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: `Template not found: ${filename}` });
+        return res.status(404).json({ error: `Template not found: ${filePath}` });
       }
       buffer = fs.readFileSync(filePath);
     }
