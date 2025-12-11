@@ -452,6 +452,17 @@ function getEsignBase() {
   return b.replace(/\/$/, '');
 }
 
+function isEsignConfiguredForReal() {
+  const base = getEsignBase();
+  if (!base) return false;
+  if (process.env.FOXIT_ESIGN_ACCESS_TOKEN) return true;
+  const tokenUrl = process.env.FOXIT_ESIGN_TOKEN_URL || process.env.FOXIT_TOKEN_URL;
+  const clientId = process.env.FOXIT_ESIGN_CLIENT_ID || process.env.FOXIT_CLIENT_ID;
+  const clientSecret = process.env.FOXIT_ESIGN_CLIENT_SECRET || process.env.FOXIT_CLIENT_SECRET;
+  if (tokenUrl && clientId && clientSecret) return true;
+  return false;
+}
+
 async function getEsignAccessToken() {
   if (process.env.FOXIT_ESIGN_ACCESS_TOKEN) return process.env.FOXIT_ESIGN_ACCESS_TOKEN;
   // Fall back to general FOXIT_* credentials if eSign-specific ones are not provided
@@ -696,9 +707,13 @@ app.post('/api/esign/send', async (req, res) => {
     const buffer = fs.readFileSync(absPath);
     const filename = path.basename(absPath);
 
-    // If we don't already have a public URL from the client, upload to filebin now
+    const liveEsign = isEsignConfiguredForReal();
+
+    // If we don't already have a public URL from the client and real eSign is
+    // configured, upload to filebin now. In mocked mode (no real eSign
+    // credentials), we skip external uploads entirely.
     let effectivePublicUrl = publicFileUrl || null;
-    if (!effectivePublicUrl) {
+    if (liveEsign && !effectivePublicUrl) {
       try {
         const up = await uploadToFileBin(buffer, filename);
         if (up && up.ok && up.url) {
@@ -732,7 +747,8 @@ app.post('/api/esign/send', async (req, res) => {
         filename,
         signerName: signer.name,
         signerEmail: signer.email,
-        publicFileUrl: effectivePublicUrl || null
+        publicFileUrl: effectivePublicUrl || null,
+        liveEsign
       });
     } catch (_) { }
 
@@ -751,7 +767,7 @@ app.post('/api/esign/send', async (req, res) => {
         mocked: !!result && !!result.mocked
       });
     } catch (_) { }
-    return res.json({ provider: 'foxit-esign', ok: true, publicFileUrl: effectivePublicUrl || null, result });
+    return res.json({ provider: 'foxit-esign', ok: true, publicFileUrl: liveEsign ? (effectivePublicUrl || null) : null, result });
   } catch (err) {
     try { console.error('eSign /api/esign/send error:', err?.message || err); } catch (_) { }
     return res.status(502).json({ provider: 'foxit-esign', ok: false, error: err.message });
