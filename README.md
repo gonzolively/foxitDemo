@@ -1,4 +1,4 @@
-# Foxit Demo (Node.js)
+# Foxit HR Onboarding Demo (Node.js)
 
 This Node.js (Express) demo shows how to turn a repetitive HR workflow into a simple, automated process using [Foxit PDF APIs](https://www.foxit.com/api/). The example use case is **New Employee Onboarding** — where employee details are pulled from an HR system (mocked in this case), merged into a PDF, previewed, and prepared for an email-based signing flow (the eSign step is currently mocked in this demo).  
 
