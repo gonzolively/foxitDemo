@@ -555,7 +555,10 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
           sequence: 1,
           allowNameChange: 'false'
         }],
-        processTextTags: false,
+        // Enable processing of Foxit eSign text tags like
+        // ${s:1:Signature_Field_Name} so templates created
+        // with those markers get real signature fields.
+        processTextTags: true,
         processAcroFields: false,
         sendNow: true,
         createEmbeddedSigningSession: false,
