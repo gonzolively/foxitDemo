@@ -1,37 +1,40 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>New Hire Onboarding • Foxit Demo</title>
-    <link rel="stylesheet" href="/style.css" />
-  </head>
-  <body>
-    <header class="app-header">
-      <div class="brand">
-        <h1>New Hire Onboarding</h1>
-      </div>
-      <p class="subtitle">Foxit API demo for analyzing, generating, previewing, and sending PDFs for signing.</p>
-    </header>
 
-    <main class="container">
-      <section class="toolbar" aria-label="Employee selector">
-        <label for="employee-select">Employee:</label>
-        <select id="employee-select" class="employee-select">
-          <option value="" disabled selected>Loading…</option>
-        </select>
-      </section>
-      <!-- Removed embedded viewer container per request: previews open in a new window -->
-      <section id="steps" class="steps"></section>
-    </main>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New Hire Onboarding • Foxit Demo</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
 
-    <footer class="app-footer">
-      <span>Foxit PDF API Demo • Placeholder UI</span>
-      <a href="/api/health" target="_blank" rel="noreferrer">API Health</a>
-    </footer>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>New Hire Onboarding</h1>
+    </div>
+    <p class="subtitle">Foxit API demo for analyzing, generating, previewing, and sending PDFs for signing.</p>
+  </header>
 
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <main class="container">
+    <section class="toolbar" aria-label="Employee selector">
+      <label for="employee-select">Employee:</label>
+      <select id="employee-select" class="employee-select">
+        <option value="" disabled selected>Loading…</option>
+      </select>
+    </section>
+    <!-- Removed embedded viewer container per request: previews open in a new window -->
+    <section id="steps" class="steps"></section>
+  </main>
 
-    <script src="/app.js"></script>
-  </body>
+  <footer class="app-footer">
+    <span>Foxit PDF API Demo • Placeholder UI</span>
+    <a href="/api/health" target="_blank" rel="noreferrer">API Health</a>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+
 </html>
