@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { execFile } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -114,6 +116,106 @@ function toSlug(s) {
     .replace(/^-+|-+$/g, '') || 'doc';
 }
 
+async function resolveFileBinDirectUrl(filebinUrl) {
+  try {
+    // First, try to resolve using curl -I so we see the same
+    // 302 + Location behavior you see on the command line.
+    const viaCurl = await new Promise(resolve => {
+      execFile('curl', ['-I', filebinUrl], { timeout: 10000 }, (err, stdout, stderr) => {
+        if (err) {
+          console.warn('[filebin] curl -I failed, falling back to fetch', err.message || String(err));
+          return resolve(null);
+        }
+        const out = stdout ? stdout.toString() : '';
+        const m = out.match(/Location:\s*(\S+)/i);
+        if (m && m[1]) {
+          const loc = m[1].trim();
+          console.log('[filebin] resolve via curl', {
+            from: filebinUrl,
+            to: loc,
+            viaRedirect: true
+          });
+          return resolve({ url: loc, viaRedirect: true, via: 'curl' });
+        }
+        console.warn('[filebin] curl -I had no Location header, falling back to fetch', out.slice(0, 400));
+        return resolve(null);
+      });
+    });
+    if (viaCurl) return viaCurl;
+
+    // Fallback: use Node fetch with redirect: 'manual'. Note that
+    // filebin may show an HTML "verified" interstitial to some
+    // clients (including Node), in which case we just return the
+    // original URL.
+    const resp = await fetch(filebinUrl, { method: 'GET', redirect: 'manual' });
+    const status = resp.status;
+    const loc = resp.headers.get('location') || resp.headers.get('Location');
+    if (status >= 300 && status < 400 && loc) {
+      console.log('[filebin] resolve direct URL via fetch', {
+        from: filebinUrl,
+        to: loc,
+        status,
+        viaRedirect: true
+      });
+      return { url: loc, viaRedirect: true, status, via: 'fetch' };
+    }
+    console.log('[filebin] resolve direct URL (no redirect visible to Node)', {
+      from: filebinUrl,
+      status,
+      viaRedirect: false
+    });
+    return { url: filebinUrl, viaRedirect: false, status };
+  } catch (e) {
+    console.error('[filebin] resolve direct URL error', e?.message || e);
+    return { url: filebinUrl, viaRedirect: false, error: e.message || String(e) };
+  }
+}
+
+// Upload a generated PDF to filebin.net and return a direct public URL
+async function uploadToFileBin(buffer, filename) {
+  const base = (process.env.FILEBIN_BASE_URL || 'https://filebin.net').replace(/\/$/, '');
+  // If FILEBIN_BIN is not set, generate a unique bin id per upload
+  const bin = process.env.FILEBIN_BIN || crypto.randomBytes(12).toString('hex');
+  const safeName = filename || 'document.pdf';
+  const filebinUrl = `${base}/${encodeURIComponent(bin)}/${encodeURIComponent(safeName)}`;
+
+  try {
+    console.warn('[filebin] POST upload', { url: filebinUrl, bin, filename: safeName });
+    const resp = await fetch(filebinUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/pdf',
+        cid: 'foxit-onboarding-demo'
+      },
+      body: buffer
+    });
+    const text = await resp.text();
+
+    if (!resp.ok) {
+      console.error('[filebin] upload failed', {
+        status: resp.status,
+        body: (text || '').slice(0, 300)
+      });
+      return { ok: false, status: resp.status, error: 'upload-failed', body: (text || '').slice(0, 300) };
+    }
+
+    // After a successful upload, resolve any redirect so we can hand Foxit
+    // a direct S3 URL instead of a 30x.
+    const resolved = await resolveFileBinDirectUrl(filebinUrl);
+    const finalUrl = resolved && resolved.url ? resolved.url : filebinUrl;
+    console.log('[filebin] upload success', {
+      filebinUrl,
+      directUrl: finalUrl,
+      viaRedirect: resolved?.viaRedirect || false,
+      status: resp.status
+    });
+    return { ok: true, url: finalUrl, filebinUrl, viaRedirect: resolved?.viaRedirect || false, status: resp.status };
+  } catch (e) {
+    console.error('[filebin] upload error', e?.message || e);
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
 // --- API: health ---
 function getAuthMode() {
   if (process.env.FOXIT_ACCESS_TOKEN || process.env.FOXIT_TOKEN_URL) return 'bearer';
@@ -122,6 +224,62 @@ function getAuthMode() {
 }
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', ts: new Date().toISOString(), analyzeProvider: 'foxit', authMode: getAuthMode() });
+});
+
+// --- API: debug filebin / HTTP behavior ---
+// Example: GET /api/debug/filebin?url=https://filebin.net/....
+app.get('/api/debug/filebin', async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: 'url query param is required' });
+
+  const result = { url };
+
+  // Node fetch HEAD with redirect: 'manual' (closest to curl -I without -L)
+  try {
+    const resp = await fetch(url, { method: 'HEAD', redirect: 'manual' });
+    result.nodeHeadManual = {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: Object.fromEntries(resp.headers.entries())
+    };
+  } catch (e) {
+    result.nodeHeadManualError = e.message || String(e);
+  }
+
+  // Node fetch GET with redirect: 'manual' to see any Location header differences
+  try {
+    const resp = await fetch(url, { method: 'GET', redirect: 'manual' });
+    result.nodeGetManual = {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: Object.fromEntries(resp.headers.entries())
+    };
+  } catch (e) {
+    result.nodeGetManualError = e.message || String(e);
+  }
+
+  // Try to shell out to curl -I and curl -I -L to compare behavior if curl is available
+  try {
+    execFile('curl', ['-I', url], { timeout: 10000 }, (err, stdout, stderr) => {
+      if (err) {
+        result.curlHead = { error: err.message || String(err), stdout: stdout?.toString(), stderr: stderr?.toString() };
+      } else {
+        result.curlHead = { stdout: stdout?.toString(), stderr: stderr?.toString() };
+      }
+
+      execFile('curl', ['-I', '-L', url], { timeout: 10000 }, (err2, stdout2, stderr2) => {
+        if (err2) {
+          result.curlHeadFollow = { error: err2.message || String(err2), stdout: stdout2?.toString(), stderr: stderr2?.toString() };
+        } else {
+          result.curlHeadFollow = { stdout: stdout2?.toString(), stderr: stderr2?.toString() };
+        }
+        return res.json(result);
+      });
+    });
+  } catch (e) {
+    result.curlSetupError = e.message || String(e);
+    return res.json(result);
+  }
 });
 
 // --- API: steps ---
@@ -224,7 +382,7 @@ app.post('/api/generate', async (req, res) => {
         if (resp.ok) {
           let json;
           try { json = JSON.parse(text); } catch (_) { json = { raw: text }; }
-          try { console.log('Foxit generate result:', JSON.stringify(redactLargeFields(json), null, 2)); } catch(_) {}
+          try { console.log('Foxit generate result:', JSON.stringify(redactLargeFields(json), null, 2)); } catch (_) { }
           // Attempt to extract base64 PDF and save to filesystem
           const b64 = extractBase64FromGenerateResp(json);
           if (b64) {
@@ -236,27 +394,29 @@ app.post('/api/generate', async (req, res) => {
             const fileName = `${ts}${empPart ? '_' + empPart : ''}_${stepPart}.pdf`;
             const absPath = path.join(OUTPUT_DIR, fileName);
             try {
-              fs.writeFileSync(absPath, Buffer.from(b64, 'base64'));
+              const pdfBuffer = Buffer.from(b64, 'base64');
+              fs.writeFileSync(absPath, pdfBuffer);
               const fileUrl = `/output/${fileName}`;
+
               const respPayload = { provider: 'foxit', saved: true, fileName, fileUrl, filePath: absPath };
               if (returnBase64 === true) respPayload.fileBase64 = b64;
               return res.json(respPayload);
             } catch (e) {
-              try { console.error('Foxit generate save failed:', e.message); } catch(_) {}
+              try { console.error('Foxit generate save failed:', e.message); } catch (_) { }
               return res.json({ provider: 'foxit', saved: false, reason: 'write-failed', detail: e.message, foxit: json });
             }
           }
           // No base64 found; return raw response
-          try { console.warn('Foxit generate response contained no PDF base64'); } catch(_) {}
+          try { console.warn('Foxit generate response contained no PDF base64'); } catch (_) { }
           return res.json({ provider: 'foxit', saved: false, reason: 'no-pdf-in-response', foxit: json });
         }
         // Log failure body (attempt to parse JSON for readability)
         try {
           let errJson;
-          try { errJson = JSON.parse(text); } catch(_) {}
+          try { errJson = JSON.parse(text); } catch (_) { }
           if (errJson) console.error('Foxit generate error response:', JSON.stringify(redactLargeFields(errJson), null, 2));
           else console.error('Foxit generate error response (text):', (text || '').slice(0, 1200));
-        } catch(_) {}
+        } catch (_) { }
         attempts.push({ url, status: resp.status, body: text?.slice(0, 300) });
       } catch (e) {
         attempts.push({ url, error: e.message });
@@ -306,7 +466,7 @@ async function getEsignAccessToken() {
   const resp = await fetch(tokenUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`eSign token failed: ${resp.status} ${text}`);
-  let json; try { json = JSON.parse(text); } catch(_) { throw new Error(`eSign token parse error: ${text?.slice(0,200)}`); }
+  let json; try { json = JSON.parse(text); } catch (_) { throw new Error(`eSign token parse error: ${text?.slice(0, 200)}`); }
   if (!json.access_token) throw new Error('No access_token in eSign token response');
   return json.access_token;
 }
@@ -320,8 +480,18 @@ async function buildEsignAuthHeaders() {
   return headers;
 }
 
-async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subject, message) {
+async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subject, message, publicFileUrl) {
   const base = getEsignBase();
+  try {
+    console.warn('[esign] sendViaFoxitEsign called', {
+      base,
+      filename,
+      signerName,
+      signerEmail,
+      subject,
+      publicFileUrl
+    });
+  } catch (_) { }
   // If eSign is not configured, behave as a mocked send and short-circuit
   if (!base) {
     return {
@@ -344,29 +514,56 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
   const attempts = [];
   const b64 = Buffer.from(buffer).toString('base64');
 
-  // If an EXTERNAL_BASE_URL is provided, try "Create Envelope from URL" (folders/createfolder)
+  // If we have a public URL (from file.io or EXTERNAL_BASE_URL), try
+  // "Create Envelope from URL" (folders/createfolder) first.
   try {
     const externalBase = process.env.EXTERNAL_BASE_URL || '';
-    if (externalBase) {
+
+    let effectiveFileUrl = null;
+    if (publicFileUrl) {
+      effectiveFileUrl = publicFileUrl;
+    } else if (externalBase) {
+      effectiveFileUrl = new URL(`/output/${encodeURIComponent(filename)}`, externalBase).toString();
+    }
+
+    if (effectiveFileUrl) {
       const url = `${base}/folders/createfolder`;
       const split = String(signerName || '').trim().split(/\s+/);
       const firstName = split.slice(0, -1).join(' ') || split[0] || 'Signer';
       const lastName = split.length > 1 ? split[split.length - 1] : '';
-      // Build a publicly reachable URL to our output file
-      const fileUrl = new URL(`/output/${encodeURIComponent(filename)}`, externalBase).toString();
       const payload = {
         folderName: subject || filename,
-        fileUrls: [ fileUrl ],
-        fileNames: [ filename ],
-        parties: [ { firstName, lastName, emailId: signerEmail, permission: 'FILL_FIELDS_AND_SIGN', sequence: 1 } ],
-        processTextTags: true,
+        inputType: 'url',
+        fileUrls: [effectiveFileUrl],
+        fileNames: [filename],
+        parties: [{
+          firstName,
+          lastName,
+          emailId: signerEmail,
+          permission: 'FILL_FIELDS_AND_SIGN',
+          sequence: 1,
+          allowNameChange: 'false'
+        }],
+        processTextTags: false,
         processAcroFields: false,
         sendNow: true,
+        createEmbeddedSigningSession: false,
+        createEmbeddedSigningSessionForAllParties: false,
         signInSequence: false
       };
+      try { console.warn('[esign] POST create-from-url', { url, fileUrl: effectiveFileUrl, signerEmail }); } catch (_) { }
       const resp = await fetch(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(payload) });
       const text = await resp.text();
-      if (resp.ok) { try { return JSON.parse(text); } catch(_) { return { raw: text }; } }
+      if (resp.ok) {
+        try {
+          const json = JSON.parse(text);
+          try { console.log('[esign] create-from-url success', { folderId: json.folderId || json.id || json.result?.id || null }); } catch (_) { }
+          return json;
+        } catch (_) {
+          try { console.log('[esign] create-from-url success (raw)', (text || '').slice(0, 400)); } catch (_) { }
+          return { raw: text };
+        }
+      }
       attempts.push({ step: 'create-from-url', url, status: resp.status, body: text?.slice(0, 300) });
     }
   } catch (e) {
@@ -381,12 +578,22 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
       emailSubject: subject,
       emailMessage: message,
       status: 'sent',
-      parties: [ { role: 'signer', name: signerName, email: signerEmail } ],
-      documents: [ { fileName: filename, fileBase64: b64, fileType: 'pdf' } ]
+      parties: [{ role: 'signer', name: signerName, email: signerEmail }],
+      documents: [{ fileName: filename, fileBase64: b64, fileType: 'pdf' }]
     };
+    try { console.warn('[esign] POST create+send', { url, signerEmail }); } catch (_) { }
     const resp = await fetch(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const text = await resp.text();
-    if (resp.ok) { try { return JSON.parse(text); } catch(_) { return { raw: text }; } }
+    if (resp.ok) {
+      try {
+        const json = JSON.parse(text);
+        try { console.log('[esign] create+send success', { envelopeId: json.id || json.envelopeId || json.EnvelopeId || json.result?.id || null }); } catch (_) { }
+        return json;
+      } catch (_) {
+        try { console.log('[esign] create+send success (raw)', (text || '').slice(0, 400)); } catch (_) { }
+        return { raw: text };
+      }
+    }
     attempts.push({ step: 'create+send', url, status: resp.status, body: text?.slice(0, 300) });
   } catch (e) {
     attempts.push({ step: 'create+send', error: e.message });
@@ -397,15 +604,16 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
   try {
     const url = `${base}/envelopes`;
     const payload = { name: subject, status: 'created' };
+    try { console.warn('[esign] POST create-envelope (multi-step)', { url, subject }); } catch (_) { }
     const r1 = await fetch(url, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const t1 = await r1.text();
-    if (!r1.ok) { attempts.push({ step: 'create', url, status: r1.status, body: t1?.slice(0,300) }); throw new Error('create failed'); }
-    let j1; try { j1 = JSON.parse(t1); } catch(_) { j1 = { raw: t1 }; }
+    if (!r1.ok) { attempts.push({ step: 'create', url, status: r1.status, body: t1?.slice(0, 300) }); throw new Error('create failed'); }
+    let j1; try { j1 = JSON.parse(t1); } catch (_) { j1 = { raw: t1 }; }
     envelopeId = j1.id || j1.envelopeId || j1.EnvelopeId || j1.result?.id;
     if (!envelopeId) throw new Error('missing envelopeId');
 
     // Upload document (try common variants)
-    const upUrls = [ `${base}/envelopes/${envelopeId}/documents`, `${base}/envelopes/${envelopeId}/files` ];
+    const upUrls = [`${base}/envelopes/${envelopeId}/documents`, `${base}/envelopes/${envelopeId}/files`];
     let uploaded = false; let upErr = null;
     for (const u of upUrls) {
       try {
@@ -416,36 +624,38 @@ async function sendViaFoxitEsign(buffer, filename, signerName, signerEmail, subj
         let r2 = await fetch(u, { method: 'POST', headers: { ...headers }, body: form });
         let t2 = await r2.text();
         if (r2.ok) { uploaded = true; break; }
-        attempts.push({ step: 'upload(multipart)', url: u, status: r2.status, body: t2?.slice(0,300) });
+        attempts.push({ step: 'upload(multipart)', url: u, status: r2.status, body: t2?.slice(0, 300) });
         // Try JSON base64 fallback
         const r2b = await fetch(u, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName: filename, fileBase64: b64, fileType: 'pdf' }) });
         const t2b = await r2b.text();
         if (r2b.ok) { uploaded = true; break; }
-        attempts.push({ step: 'upload(json)', url: u, status: r2b.status, body: t2b?.slice(0,300) });
+        attempts.push({ step: 'upload(json)', url: u, status: r2b.status, body: t2b?.slice(0, 300) });
       } catch (e) { upErr = e; }
     }
-    if (!uploaded) throw new Error(`upload failed${upErr?': '+upErr.message:''}`);
+    if (!uploaded) throw new Error(`upload failed${upErr ? ': ' + upErr.message : ''}`);
 
     // Add parties/recipients
     const pUrl = `${base}/envelopes/${envelopeId}/parties`;
-    const pResp = await fetch(pUrl, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ parties: [ { role: 'signer', name: signerName, email: signerEmail } ] }) });
+    try { console.warn('[esign] POST parties', { url: pUrl, signerEmail }); } catch (_) { }
+    const pResp = await fetch(pUrl, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ parties: [{ role: 'signer', name: signerName, email: signerEmail }] }) });
     const pText = await pResp.text();
-    if (!pResp.ok) { attempts.push({ step: 'parties', url: pUrl, status: pResp.status, body: pText?.slice(0,300) }); throw new Error('parties failed'); }
+    if (!pResp.ok) { attempts.push({ step: 'parties', url: pUrl, status: pResp.status, body: pText?.slice(0, 300) }); throw new Error('parties failed'); }
 
     // Send
     const sUrl = `${base}/envelopes/${envelopeId}/send`;
+    try { console.warn('[esign] POST send-envelope', { url: sUrl, envelopeId }); } catch (_) { }
     const sResp = await fetch(sUrl, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ emailSubject: subject, emailMessage: message }) });
     const sText = await sResp.text();
-    if (sResp.ok) { try { return JSON.parse(sText); } catch(_) { return { raw: sText, envelopeId }; } }
-    attempts.push({ step: 'send', url: sUrl, status: sResp.status, body: sText?.slice(0,300) });
+    if (sResp.ok) { try { return JSON.parse(sText); } catch (_) { return { raw: sText, envelopeId }; } }
+    attempts.push({ step: 'send', url: sUrl, status: sResp.status, body: sText?.slice(0, 300) });
   } catch (e) {
     attempts.push({ step: 'multi-step', error: e.message, envelopeId });
   }
 
   try {
     console.error('Foxit eSign send failed. Attempts:', JSON.stringify(attempts, null, 2));
-  } catch(_) {}
-  throw new Error(`eSign send failed; attempts: ${attempts.map(a=>`${a.step||''}@${a.url||''} -> ${a.status||'ERR'}${a.error?(' '+a.error):''}`).join(' | ')}`);
+  } catch (_) { }
+  throw new Error(`eSign send failed; attempts: ${attempts.map(a => `${a.step || ''}@${a.url || ''} -> ${a.status || 'ERR'}${a.error ? (' ' + a.error) : ''}`).join(' | ')}`);
 }
 
 function findLatestPdfByStep(stepKey) {
@@ -454,24 +664,24 @@ function findLatestPdfByStep(stepKey) {
     const files = fs.readdirSync(OUTPUT_DIR)
       .filter(f => f.toLowerCase().endsWith('.pdf') && f.includes(`_${slug}.pdf`))
       .map(f => ({ f, m: fs.statSync(path.join(OUTPUT_DIR, f)).mtimeMs }))
-      .sort((a,b)=>b.m - a.m);
+      .sort((a, b) => b.m - a.m);
     return files[0] ? path.join(OUTPUT_DIR, files[0].f) : null;
-  } catch(_) { return null; }
+  } catch (_) { return null; }
 }
 
-function readEmployee(key){
+function readEmployee(key) {
   try {
     if (!key) return null;
     const p = path.join(__dirname, 'employee_data', `${key}.json`);
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch(_) { return null; }
+  } catch (_) { return null; }
 }
 
-// POST /api/esign/send { stepKey?, fileUrl?, filePath?, employeeKey?, signerEmail?, signerName?, subject?, message? }
+// POST /api/esign/send { stepKey?, fileUrl?, filePath?, publicFileUrl?, employeeKey?, signerEmail?, signerName?, subject?, message? }
 app.post('/api/esign/send', async (req, res) => {
   try {
-    const { stepKey, fileUrl, filePath, employeeKey, signerEmail, signerName, subject, message } = req.body || {};
+    const { stepKey, fileUrl, filePath, publicFileUrl, employeeKey, signerEmail, signerName, subject, message } = req.body || {};
 
     // Resolve file
     let absPath = filePath;
@@ -486,21 +696,64 @@ app.post('/api/esign/send', async (req, res) => {
     const buffer = fs.readFileSync(absPath);
     const filename = path.basename(absPath);
 
-    // Resolve recipient
-    let signer = { name: signerName, email: signerEmail };
-    if ((!signer.name || !signer.email) && employeeKey) {
-      const emp = readEmployee(employeeKey);
-      if (emp) signer = { name: signer.name || emp.employeeName || 'Employee', email: signer.email || emp.employeeEmail };
+    // If we don't already have a public URL from the client, upload to filebin now
+    let effectivePublicUrl = publicFileUrl || null;
+    if (!effectivePublicUrl) {
+      try {
+        const up = await uploadToFileBin(buffer, filename);
+        if (up && up.ok && up.url) {
+          effectivePublicUrl = up.url;
+        }
+      } catch (e) {
+        console.error('[filebin] upload during /api/esign/send threw', e?.message || e);
+      }
     }
-    if (!signer.email) return res.status(400).json({ error: 'missing-signer', detail: 'Provide signerEmail or employeeKey with employeeEmail' });
+
+    // Resolve recipient (prefer explicit signerEmail, then env override, then employee JSON)
+    const overrideEmail = process.env.FOXIT_ESIGN_DEMO_SIGNER_EMAIL || '';
+    let signer = { name: signerName, email: signerEmail };
+    if (employeeKey) {
+      const emp = readEmployee(employeeKey);
+      if (emp) {
+        signer = {
+          name: signer.name || emp.employeeName || 'Employee',
+          // If an override email is configured, use it for all employees
+          email: signer.email || overrideEmail || emp.employeeEmail
+        };
+      }
+    }
+    if (!signer.email && overrideEmail) signer.email = overrideEmail;
+    if (!signer.email) return res.status(400).json({ error: 'missing-signer', detail: 'Provide signerEmail or employeeKey with employeeEmail, or set FOXIT_ESIGN_DEMO_SIGNER_EMAIL' });
+
+    try {
+      console.warn('[esign] /api/esign/send', {
+        stepKey,
+        employeeKey,
+        filename,
+        signerName: signer.name,
+        signerEmail: signer.email,
+        publicFileUrl: effectivePublicUrl || null
+      });
+    } catch (_) { }
 
     const subj = subject || `${toDisplay(stepKey || 'Document')} — Please Sign`;
-    const msg = message || `Hello${signer.name?` ${signer.name}`:''},\n\nPlease sign the attached document.\n\nThank you.`;
+    const msg = message || `Hello${signer.name ? ` ${signer.name}` : ''},\n\nPlease sign the attached document.\n\nThank you.`;
 
-    const result = await sendViaFoxitEsign(buffer, filename, signer.name || 'Signer', signer.email, subj, msg);
-    return res.json({ provider: 'foxit-esign', ok: true, result });
+    const result = await sendViaFoxitEsign(buffer, filename, signer.name || 'Signer', signer.email, subj, msg, effectivePublicUrl);
+    try {
+      console.log('[esign] /api/esign/send result (summary)', {
+        ok: true,
+        provider: 'foxit-esign',
+        signerEmail: signer.email,
+        stepKey,
+        hasResult: !!result,
+        publicFileUrl: effectivePublicUrl || null,
+        mocked: !!result && !!result.mocked
+      });
+    } catch (_) { }
+    return res.json({ provider: 'foxit-esign', ok: true, publicFileUrl: effectivePublicUrl || null, result });
   } catch (err) {
-    try { console.error('eSign /api/esign/send error:', err?.message || err); } catch(_) {}
+    try { console.error('eSign /api/esign/send error:', err?.message || err); } catch (_) { }
     return res.status(502).json({ provider: 'foxit-esign', ok: false, error: err.message });
   }
 });
@@ -561,7 +814,7 @@ app.get('/api/esign/health', async (req, res) => {
           try {
             const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
             tokenPreview = { iss: payload.iss, sub: payload.sub, aud: payload.aud, exp: payload.exp, scope: payload.scope };
-          } catch(_) { tokenPreview = token.slice(0, 12) + '…'; }
+          } catch (_) { tokenPreview = token.slice(0, 12) + '…'; }
         } else {
           tokenPreview = token.slice(0, 12) + '…';
         }
@@ -666,7 +919,7 @@ async function getFoxitAccessToken() {
 }
 
 async function buildFoxitAuthHeaders() {
-  const headers = { };
+  const headers = {};
   const id = process.env.FOXIT_CLIENT_ID || process.env.FOXIT_CLOUD_API_CLIENT_ID;
   const secret = process.env.FOXIT_CLIENT_SECRET || process.env.FOXIT_CLOUD_API_CLIENT_SECRET;
 
@@ -715,9 +968,9 @@ function extractBase64FromGenerateResp(resp) {
 function redactLargeFields(obj, depth = 0) {
   const MAX_INLINE = 200; // inline strings up to this length
   const BASE64_KEYS = new Set([
-    'base64FileString','FileBase64','fileBase64','Base64FileString',
-    'document','documentBase64','file','pdfBase64','content','data',
-    'fileContent','FileContent','FileBytes','pdf','Pdf','PDF','OutputFile'
+    'base64FileString', 'FileBase64', 'fileBase64', 'Base64FileString',
+    'document', 'documentBase64', 'file', 'pdfBase64', 'content', 'data',
+    'fileContent', 'FileContent', 'FileBytes', 'pdf', 'Pdf', 'PDF', 'OutputFile'
   ]);
   if (obj == null) return obj;
   if (typeof obj === 'string') {
@@ -816,7 +1069,7 @@ async function analyzeViaFoxit(buffer, filename) {
       attempts.push({ url, error: e.message });
     }
   }
-  throw new Error(`Foxit analyze failed. Attempts: ${attempts.map(a => `${a.url} -> ${a.status||'ERR'}${a.body?` ${a.body}`:''}${a.error?` ${a.error}`:''}`).join(' | ')}`);
+  throw new Error(`Foxit analyze failed. Attempts: ${attempts.map(a => `${a.url} -> ${a.status || 'ERR'}${a.body ? ` ${a.body}` : ''}${a.error ? ` ${a.error}` : ''}`).join(' | ')}`);
 }
 
 // --- API: analyze (.docx via Foxit) ---

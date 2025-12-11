@@ -41,7 +41,9 @@ This Node.js (Express) demo shows how to turn a repetitive HR workflow into a si
 3. Under the **"PDF Services API"** product, choose a plan (the **Developer** plan is a good free starting point) and click **"Get Started"**.  
 4. After the plan is provisioned, you will see your **Base URL**, **Client ID**, and **Client Secret**. Copy these values down somewhere, as you will paste them into your `.env` file in the following steps.
 
-> **Note on Foxit eSign:** If you want to enable the eSign part of this demo (so it actually sends emails and collects signatures), you’ll first need to request Foxit eSign API access via the [Foxit API Pricing page](https://app.developer-api.foxit.com/pricing) using **"Request Access/Pricing"**. Currently, the Foxit eSign API is available **by request only** and is not included in the standard Developer plan (which currently covers the **PDF Services** API and **Document Generation** APIs). The eSign parts of this demo are implemented as mocks/placeholders to help you see where a real eSign integration would plug in.
+> **Note on Foxit eSign:** If you want to enable the [eSign](https://www.foxit.com/api/esign-api/) part of this demo (so it actually sends emails and collects signatures), you’ll first need to request Foxit eSign API access via the [Foxit API Pricing page](https://app.developer-api.foxit.com/pricing) using **"Request Access/Pricing"**. Currently, the Foxit eSign API is available **by request only** and is not included in the standard Developer plan (which currently covers the **PDF Services** API and **Document Generation** APIs). The eSign parts of this demo are implemented as mocks/placeholders to help you see where a real eSign integration would plug in.
+>
+> Once you do have Foxit eSign API access, copy `.env.example` to `.env`, then open `.env` and review the eSign section, uncommenting/updating the relevant lines so the demo uses your real tenant and credentials.
 ---
 
 ## 🧰 How to Run the Demo

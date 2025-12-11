@@ -56,7 +56,7 @@ async function ensureFoxitEmbed() {
       const data = await res.json();
       foxitClientId = data.foxitClientId || '';
       cfg = data;
-    } catch (_) {}
+    } catch (_) { }
   }
   if (!foxitClientId) {
     showToast('Configure FOXIT_CLIENT_ID to use the embedded viewer');
@@ -134,7 +134,7 @@ async function handleAction(action, step, btn) {
         let msg = `${step.title}: generate failed`;
         if (genData && genData.error) msg += ` — ${genData.error}`;
         showToast(msg, { kind: 'error', durationMs: 8000 });
-        try { console.debug('Generate failed', genData); } catch(_) {}
+        try { console.debug('Generate failed', genData); } catch (_) { }
         return;
       }
       if (btn) { btn.classList.add('success'); btn.classList.remove('error'); btn.setAttribute('aria-pressed', 'true'); }
@@ -148,7 +148,7 @@ async function handleAction(action, step, btn) {
           const base = '/output/';
           const name = genData.filePath.split('/').pop();
           if (name) pdfUrl = base + encodeURIComponent(name);
-        } catch(_) {}
+        } catch (_) { }
       }
       if (pdfUrl) {
         lastGenerated[step.key] = pdfUrl;
@@ -177,7 +177,7 @@ async function handleAction(action, step, btn) {
       return;
     }
 
-    // 3) Send for signing: call the eSign endpoint as-is
+    // 3) Send for signing: call the eSign endpoint; server handles upload
     if (action === 'send') {
       const res = await fetch('/api/esign/send', {
         method: 'POST',
@@ -189,10 +189,19 @@ async function handleAction(action, step, btn) {
       if (res.ok || res.status === 202) {
         if (btn) { btn.classList.add('success'); btn.classList.remove('error'); btn.setAttribute('aria-pressed', 'true'); }
         showToast(`${step.title}: send queued`, { kind: 'success' });
+        try {
+          console.info('[esign] Send queued', {
+            stepKey: step.key,
+            employeeKey: currentEmployeeKey,
+            publicFileUrl: data && data.publicFileUrl ? data.publicFileUrl : null,
+            provider: data && data.provider,
+            mocked: data && data.result && data.result.mocked === true
+          });
+        } catch (_) { }
       } else {
         if (btn) { btn.classList.add('error'); btn.classList.remove('success'); }
-        showToast(`${step.title}: send failed${data?.error?` — ${data.error}`:''}`, { kind: 'error', durationMs: 8000 });
-        try { console.debug('Send failed', data); } catch(_) {}
+        showToast(`${step.title}: send failed${data?.error ? ` — ${data.error}` : ''}`, { kind: 'error', durationMs: 8000 });
+        try { console.debug('Send failed', data); } catch (_) { }
       }
       return;
     }
@@ -205,7 +214,7 @@ async function handleAction(action, step, btn) {
       btn.classList.add('error');
     }
     showToast(`Error: ${action} failed`, { kind: 'error', durationMs: 8000 });
-    try { console.debug('Request error:', err); } catch (_) {}
+    try { console.debug('Request error:', err); } catch (_) { }
   }
 }
 
